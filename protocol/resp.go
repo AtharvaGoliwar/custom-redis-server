@@ -87,3 +87,12 @@ func EncodeArrayRaw(items []string) string {
 func EncodeArrayHeader(n int) string {
 	return fmt.Sprintf("*%d\r\n", n)
 }
+
+func EncodeArray(elements []string) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("*%d\r\n", len(elements)))
+	for _, elem := range elements {
+		b.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(elem), elem))
+	}
+	return b.String()
+}
