@@ -51,21 +51,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 	clientState := &ClientState{}
 
 	for {
-		// conn.Write([]byte("> "))
-		// line, err := reader.ReadString('\n')
-		// if err != nil {
-		// 	return
-		// }
-
 		tokens, err := protocol.Parse(reader)
 		if err != nil {
 			conn.Write([]byte(protocol.EncodeError("invalid request")))
 		}
-
-		// tokens := strings.Fields(strings.TrimSpace(line))
-		// if len(tokens) == 0 {
-		// 	continue
-		// }
 
 		cmd := strings.ToUpper(tokens[0])
 
@@ -131,114 +120,6 @@ func (s *Server) handleConnection(conn net.Conn) {
 		// Normal command path
 		reply := s.executeCommand(tokens)
 		conn.Write([]byte(reply))
-
-		// cmd := tokens[0]
-
-		// switch cmd {
-		// case "SET":
-		// 	if len(tokens)%2 != 1 {
-		// 		conn.Write([]byte(protocol.EncodeError("wrong number of arguments for SET")))
-		// 		continue
-		// 	}
-		// 	for i := 1; i < len(tokens); i += 2 {
-		// 		s.Store.Set(tokens[i], tokens[i+1])
-		// 	}
-		// 	conn.Write([]byte(protocol.EncodeSimple("OK")))
-		// 	s.executeCommand(tokens)
-
-		// case "GET":
-		// 	if len(tokens) < 2 {
-		// 		conn.Write([]byte(protocol.EncodeError("wrong number of arguments for GET")))
-		// 		continue
-		// 	}
-		// 	s.executeCommand(tokens)
-		// 	if len(tokens) == 2 {
-		// 		val, ok := s.Store.Get(tokens[1])
-		// 		if !ok {
-		// 			conn.Write([]byte(protocol.EncodeBulk("(nil)")))
-		// 		} else {
-		// 			conn.Write([]byte(protocol.EncodeBulk(val)))
-		// 		}
-		// 		continue
-		// 	} else {
-		// 		values := []string{}
-		// 		for i := 1; i < len(tokens); i++ {
-		// 			val, ok := s.Store.Get(tokens[i])
-		// 			if !ok {
-		// 				values = append(values, protocol.EncodeBulk("(nil)"))
-		// 			} else {
-		// 				values = append(values, protocol.EncodeBulk(val))
-		// 			}
-		// 		}
-		// 		conn.Write([]byte(protocol.EncodeArrayRaw(values)))
-		// 	}
-
-		// case "DEL":
-		// 	if len(tokens) < 2 {
-		// 		conn.Write([]byte(protocol.EncodeError("wrong number of arguments for DEL")))
-		// 		continue
-		// 	}
-		// 	count := 0
-		// 	for i := 1; i < len(tokens); i++ {
-		// 		count += s.Store.Del(tokens[i])
-		// 	}
-		// 	conn.Write([]byte(protocol.EncodeInteger(count)))
-
-		// case "EXISTS":
-		// 	if len(tokens) < 2 {
-		// 		conn.Write([]byte(protocol.EncodeError("wrong number of arguments for EXISTS")))
-		// 		continue
-		// 	}
-		// 	count := 0
-		// 	for i := 1; i < len(tokens); i++ {
-		// 		count += s.Store.Exists(tokens[i])
-		// 	}
-		// 	conn.Write([]byte(protocol.EncodeInteger(count)))
-
-		// case "EXPIRE":
-		// 	if len(tokens) != 3 {
-		// 		conn.Write([]byte(protocol.EncodeError("wrong number of arguments for EXPIRE")))
-		// 		continue
-		// 	}
-		// 	seconds, err := strconv.ParseInt(tokens[2], 10, 64)
-		// 	if err != nil {
-		// 		conn.Write([]byte(protocol.EncodeError("invalid seconds argument")))
-		// 		continue
-		// 	}
-		// 	success := s.Store.Expire(tokens[1], seconds)
-		// 	if success {
-		// 		conn.Write([]byte(protocol.EncodeInteger(1)))
-		// 	} else {
-		// 		conn.Write([]byte(protocol.EncodeInteger(0)))
-		// 	}
-
-		// case "TTL":
-		// 	if len(tokens) != 2 {
-		// 		conn.Write([]byte(protocol.EncodeError("wrong number of arguments for TTL")))
-		// 		continue
-		// 	}
-		// 	ttl := s.Store.TTL(tokens[1])
-		// 	conn.Write([]byte(protocol.EncodeInteger(int(ttl))))
-
-		// case "PERSIST":
-		// 	if len(tokens) != 2 {
-		// 		conn.Write([]byte(protocol.EncodeError("wrong number of arguments for PERSIST")))
-		// 		continue
-		// 	}
-		// 	success := s.Store.Persist(tokens[1])
-		// 	if success {
-		// 		conn.Write([]byte(protocol.EncodeInteger(1)))
-		// 	} else {
-		// 		conn.Write([]byte(protocol.EncodeInteger(0)))
-		// 	}
-
-		// case "QUIT":
-		// 	conn.Write([]byte(protocol.EncodeSimple("BYE!")))
-		// 	return
-
-		// default:
-		// 	conn.Write([]byte(protocol.EncodeError("unknown command!!")))
-		// }
 	}
 }
 
@@ -264,15 +145,6 @@ func isValidCommand(tokens []string) bool {
 func (s *Server) executeCommand(tokens []string) string {
 	cmd := strings.ToUpper(tokens[0])
 	switch cmd {
-	// case "SET":
-	// 	s.Store.Set(tokens[1], tokens[2])
-	// 	return protocol.EncodeSimpleString("OK")
-	// case "GET":
-	// 	val, ok := store.Get(tokens[1])
-	// 	if !ok {
-	// 		return protocol.EncodeNil()
-	// 	}
-	// 	return protocol.EncodeBulk(val)
 	case "DEL":
 		if len(tokens) < 2 {
 			return protocol.EncodeError("wrong number of arguments for DEL")
