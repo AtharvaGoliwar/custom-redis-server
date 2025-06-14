@@ -25,6 +25,9 @@ type Server struct {
 	userGroups  map[string]string // username -> group
 
 	clients sync.Map // map[net.Conn]*ClientSession
+
+	pubsubMu    sync.Mutex
+	subscribers map[string][]chan string
 }
 
 type ClientState struct {
@@ -56,6 +59,7 @@ func NewServer() *Server {
 			"user2": "group2",
 			"admin": "admin",
 		},
+		subscribers: make(map[string][]chan string),
 	}
 	server.ReplayAOF()
 	return server
@@ -79,7 +83,7 @@ func (s *Server) ReplayAOF() {
 		if err != nil {
 			break
 		}
-		s.executeCommand(tokens, nil, nil) // no need to re-append during replay
+		s.executeCommand(tokens, nil, nil, nil) // no need to re-append during replay
 	}
 }
 
@@ -213,7 +217,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 			// Execute
 			conn.Write([]byte(protocol.EncodeArrayHeader(len(clientState.TransactionQueue))))
 			for _, queued := range clientState.TransactionQueue {
-				reply := s.executeCommand(queued, s.aof, session)
+				reply := s.executeCommand(queued, s.aof, session, conn)
 				conn.Write([]byte(reply))
 			}
 
@@ -223,7 +227,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		}
 
 		// Normal command path
-		reply := s.executeCommand(tokens, s.aof, session)
+		reply := s.executeCommand(tokens, s.aof, session, conn)
 		conn.Write([]byte(reply))
 	}
 }
@@ -253,7 +257,7 @@ func isValidCommand(tokens []string) bool {
 	}
 }
 
-func (s *Server) executeCommand(tokens []string, aof *AOF, session *ClientSession) string {
+func (s *Server) executeCommand(tokens []string, aof *AOF, session *ClientSession, conn net.Conn) string {
 	cmd := strings.ToUpper(tokens[0])
 
 	// ADDUSER
@@ -307,7 +311,7 @@ func (s *Server) executeCommand(tokens []string, aof *AOF, session *ClientSessio
 	}
 
 	// Enforce key access for commands that involve keys
-	if session != nil && session.group != "admin" && len(tokens) > 1 {
+	if session != nil && session.group != "admin" && len(tokens) > 1 && cmd != "SUBSCRIBE" && cmd != "PUBLISH" {
 		key := tokens[1]
 		if !strings.HasPrefix(key, session.group+":") {
 			return protocol.EncodeError("Permission denied for key " + key)
@@ -441,6 +445,12 @@ func (s *Server) executeCommand(tokens []string, aof *AOF, session *ClientSessio
 		values = append(values, protocol.EncodeBulk(session.group))
 		return protocol.EncodeArrayRaw(values)
 
+	case "PUBLISH":
+		return s.publish(tokens)
+	case "SUBSCRIBE":
+		go s.handleSubscription(conn, tokens[1:])
+		return ""
+
 	case "QUIT":
 		return protocol.EncodeSimple("BYE!")
 
@@ -471,4 +481,61 @@ func (s *Server) listUsers() string {
 	// fmt.Println("LISTUSERS RESP:", resp)
 	return resp
 
+}
+
+func (s *Server) publish(tokens []string) string {
+	if len(tokens) != 3 {
+		return protocol.EncodeError("Usage: PUBLISH <channel> <message>")
+	}
+
+	channel, message := tokens[1], tokens[2]
+
+	s.pubsubMu.Lock()
+	defer s.pubsubMu.Unlock()
+
+	subs, ok := s.subscribers[channel]
+	if !ok {
+		return protocol.EncodeInteger(0)
+	}
+
+	count := 0
+	for _, ch := range subs {
+		ch <- message
+		count++
+	}
+
+	return protocol.EncodeInteger(count)
+}
+
+func (s *Server) handleSubscription(conn net.Conn, channels []string) {
+	subs := make([]chan string, 0)
+
+	s.pubsubMu.Lock()
+	for _, channel := range channels {
+		ch := make(chan string)
+		s.subscribers[channel] = append(s.subscribers[channel], ch)
+		subs = append(subs, ch)
+
+		ack := protocol.EncodeArray([]string{"subscribe", channel, "1"})
+		conn.Write([]byte(ack))
+	}
+	s.pubsubMu.Unlock()
+
+	merged := mergeChannels(subs)
+	for msg := range merged {
+		response := protocol.EncodeArray([]string{"message", "<channel>", msg})
+		conn.Write([]byte(response))
+	}
+}
+
+func mergeChannels(channels []chan string) chan string {
+	out := make(chan string)
+	for _, ch := range channels {
+		go func(c chan string) {
+			for v := range c {
+				out <- v
+			}
+		}(ch)
+	}
+	return out
 }
