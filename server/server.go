@@ -27,7 +27,13 @@ type Server struct {
 	clients sync.Map // map[net.Conn]*ClientSession
 
 	pubsubMu    sync.Mutex
-	subscribers map[string][]chan string
+	subscribers map[string][]*subscriber
+}
+
+type subscriber struct {
+	conn    net.Conn
+	ch      chan string
+	channel string
 }
 
 type ClientState struct {
@@ -59,7 +65,7 @@ func NewServer() *Server {
 			"user2": "group2",
 			"admin": "admin",
 		},
-		subscribers: make(map[string][]chan string),
+		subscribers: make(map[string][]*subscriber),
 	}
 	server.ReplayAOF()
 	return server
@@ -499,8 +505,8 @@ func (s *Server) publish(tokens []string) string {
 	}
 
 	count := 0
-	for _, ch := range subs {
-		ch <- message
+	for _, sub := range subs {
+		sub.ch <- message
 		count++
 	}
 
@@ -508,34 +514,74 @@ func (s *Server) publish(tokens []string) string {
 }
 
 func (s *Server) handleSubscription(conn net.Conn, channels []string) {
-	subs := make([]chan string, 0)
+	subs := []*subscriber{}
 
 	s.pubsubMu.Lock()
 	for _, channel := range channels {
 		ch := make(chan string)
-		s.subscribers[channel] = append(s.subscribers[channel], ch)
-		subs = append(subs, ch)
+		sub := &subscriber{conn: conn, ch: ch, channel: channel}
+		s.subscribers[channel] = append(s.subscribers[channel], sub)
+		subs = append(subs, sub)
 
 		ack := protocol.EncodeArray([]string{"subscribe", channel, "1"})
 		conn.Write([]byte(ack))
 	}
 	s.pubsubMu.Unlock()
 
-	merged := mergeChannels(subs)
-	for msg := range merged {
-		response := protocol.EncodeArray([]string{"message", "<channel>", msg})
-		conn.Write([]byte(response))
+	done := make(chan struct{})
+
+	// Connection monitor
+	go func() {
+		buf := make([]byte, 1)
+		for {
+			_, err := conn.Read(buf)
+			if err != nil {
+				close(done)
+				return
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-done:
+			for _, sub := range subs {
+				s.unsubscribe(sub)
+				close(sub.ch)
+			}
+			return
+
+		case msg := <-mergeSubscriberChans(subs):
+			for _, sub := range subs {
+				response := protocol.EncodeArray([]string{"message", sub.channel, msg})
+				sub.conn.Write([]byte(response))
+			}
+		}
 	}
 }
 
-func mergeChannels(channels []chan string) chan string {
+func mergeSubscriberChans(subs []*subscriber) chan string {
 	out := make(chan string)
-	for _, ch := range channels {
+	for _, sub := range subs {
 		go func(c chan string) {
 			for v := range c {
 				out <- v
 			}
-		}(ch)
+		}(sub.ch)
 	}
 	return out
+}
+
+func (s *Server) unsubscribe(sub *subscriber) {
+	s.pubsubMu.Lock()
+	defer s.pubsubMu.Unlock()
+
+	subs := s.subscribers[sub.channel]
+	newSubs := []*subscriber{}
+	for _, existingSub := range subs {
+		if existingSub != sub {
+			newSubs = append(newSubs, existingSub)
+		}
+	}
+	s.subscribers[sub.channel] = newSubs
 }
