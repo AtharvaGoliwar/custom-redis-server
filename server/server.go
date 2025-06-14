@@ -314,6 +314,26 @@ func (s *Server) executeCommand(tokens []string, aof *AOF, session *ClientSessio
 		}
 	}
 
+	if cmd == "GET" || cmd == "DEL" || cmd == "EXISTS" && session != nil {
+		if len(tokens) > 2 {
+			for i := 1; i < len(tokens); i++ {
+				if !strings.HasPrefix(tokens[i], session.group+":") {
+					return protocol.EncodeError("Permission denied for key " + tokens[i])
+				}
+			}
+		}
+	}
+
+	if cmd == "SET" && session != nil {
+		if len(tokens) > 3 {
+			for i := 1; i < len(tokens); i += 2 {
+				if !strings.HasPrefix(tokens[i], session.group+":") {
+					return protocol.EncodeError("Permission denied for key " + tokens[i])
+				}
+			}
+		}
+	}
+
 	switch cmd {
 	case "DEL":
 		if len(tokens) < 2 {
@@ -354,6 +374,9 @@ func (s *Server) executeCommand(tokens []string, aof *AOF, session *ClientSessio
 		if len(tokens) > 2 {
 			values := []string{}
 			for i := 1; i < len(tokens); i++ {
+				if !strings.HasPrefix(tokens[i], session.group+":") {
+					return protocol.EncodeError("Permission denied for key " + tokens[i])
+				}
 				val, ok := s.Store.Get(tokens[i])
 				if !ok {
 					values = append(values, protocol.EncodeBulk("(nil)"))
