@@ -317,7 +317,7 @@ func isValidCommand(tokens []string) bool {
 		return (len(tokens)-1)%2 == 0
 	case "GET":
 		return len(tokens) >= 2
-	case "ME":
+	case "ME", "PING":
 		return len(tokens) == 1
 	case "ADDUSER":
 		return len(tokens) == 4
@@ -382,7 +382,7 @@ func (s *Server) executeCommand(tokens []string, aof *AOF, session *ClientSessio
 	}
 
 	// Enforce key access for commands that involve keys
-	if session != nil && session.group != "admin" && len(tokens) > 1 && cmd != "SUBSCRIBE" && cmd != "PUBLISH" {
+	if session != nil && session.group != "admin" && len(tokens) > 1 && cmd != "SUBSCRIBE" && cmd != "PUBLISH" && cmd != "PING" {
 		key := tokens[1]
 		if !strings.HasPrefix(key, session.group+":") {
 			return protocol.EncodeError("Permission denied for key " + key)
@@ -515,6 +515,15 @@ func (s *Server) executeCommand(tokens []string, aof *AOF, session *ClientSessio
 		values = append(values, protocol.EncodeBulk(session.username))
 		values = append(values, protocol.EncodeBulk(session.group))
 		return protocol.EncodeArrayRaw(values)
+
+	case "PING":
+		if len(tokens) == 1 {
+			return protocol.EncodeSimple("PONG")
+		}
+		if len(tokens) > 2 {
+			return protocol.EncodeError("wrong number of arguments for PING")
+		}
+		return protocol.EncodeSimple(tokens[1])
 
 	case "PUBLISH":
 		return s.publish(tokens)
