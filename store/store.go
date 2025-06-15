@@ -1,6 +1,11 @@
 package store
 
 import (
+	"bufio"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -16,13 +21,13 @@ type Item struct {
 }
 
 type Store struct {
-	data map[string]Item
-	mu   sync.RWMutex
+	Data map[string]Item
+	Mu   sync.RWMutex
 }
 
 func NewStore() *Store {
 	s := &Store{
-		data: make(map[string]Item),
+		Data: make(map[string]Item),
 	}
 	// Start background cleaner
 	go s.startCleaner()
@@ -34,27 +39,27 @@ func (s *Store) startCleaner() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		s.mu.Lock()
+		s.Mu.Lock()
 		now := time.Now().Unix()
-		for key, item := range s.data {
+		for key, item := range s.Data {
 			if item.Expiration > 0 && now > item.Expiration {
-				delete(s.data, key)
+				delete(s.Data, key)
 			}
 		}
-		s.mu.Unlock()
+		s.Mu.Unlock()
 	}
 }
 
 func (s *Store) Set(key, value string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.data[key] = Item{Value: value, Expiration: 0}
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	s.Data[key] = Item{Value: value, Expiration: 0}
 }
 
 func (s *Store) Get(key string) (string, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	item, found := s.data[key]
+	s.Mu.RLock()
+	defer s.Mu.RUnlock()
+	item, found := s.Data[key]
 	if !found {
 		return "", false
 	}
@@ -65,21 +70,21 @@ func (s *Store) Get(key string) (string, bool) {
 }
 
 func (s *Store) Del(key string) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
 
-	if _, found := s.data[key]; found {
-		delete(s.data, key)
+	if _, found := s.Data[key]; found {
+		delete(s.Data, key)
 		return 1
 	}
 	return 0
 }
 
 func (s *Store) Exists(key string) int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.Mu.RLock()
+	defer s.Mu.RUnlock()
 
-	item, found := s.data[key]
+	item, found := s.Data[key]
 	if !found {
 		return 0
 	}
@@ -92,10 +97,10 @@ func (s *Store) Exists(key string) int {
 }
 
 func (s *Store) Expire(key string, seconds int64) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
 
-	item, found := s.data[key]
+	item, found := s.Data[key]
 	if !found {
 		return false
 	}
@@ -105,15 +110,15 @@ func (s *Store) Expire(key string, seconds int64) bool {
 	}
 
 	item.Expiration = time.Now().Unix() + seconds
-	s.data[key] = item
+	s.Data[key] = item
 	return true
 }
 
 func (s *Store) TTL(key string) int64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.Mu.RLock()
+	defer s.Mu.RUnlock()
 
-	item, found := s.data[key]
+	item, found := s.Data[key]
 	if !found {
 		return -2 // Key does not exist
 	}
@@ -131,10 +136,10 @@ func (s *Store) TTL(key string) int64 {
 }
 
 func (s *Store) Persist(key string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
 
-	item, found := s.data[key]
+	item, found := s.Data[key]
 	if !found {
 		return false
 	}
@@ -144,6 +149,75 @@ func (s *Store) Persist(key string) bool {
 	}
 
 	item.Expiration = 0
-	s.data[key] = item
+	s.Data[key] = item
 	return true
+}
+
+// SaveRDB writes the entire database to a dump.rdb file
+func (s *Store) SaveRDB(filename string) error {
+	s.Mu.RLock()
+	defer s.Mu.RUnlock()
+
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+
+	for key, item := range s.Data {
+		// Serialize as: key|value|expiration\n
+		line := fmt.Sprintf("%s|%s|%d\n", key, item.Value, item.Expiration)
+		_, err := writer.WriteString(line)
+		if err != nil {
+			return err
+		}
+	}
+
+	return writer.Flush()
+}
+
+// LoadRDB reads the dump.rdb file and populates the store
+func (s *Store) LoadRDB(filename string) error {
+	file, err := os.Open(filename)
+	if err != nil {
+		// It's fine if file doesn't exist (first run)
+		return nil
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+
+	now := time.Now().Unix()
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		parts := strings.SplitN(line, "|", 3)
+		if len(parts) != 3 {
+			continue
+		}
+
+		key := parts[0]
+		value := parts[1]
+		expiration, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil {
+			expiration = 0
+		}
+
+		// Check if expired
+		if expiration != 0 && expiration <= now {
+			continue // skip expired keys
+		}
+
+		s.Data[key] = Item{
+			Value:      value,
+			Expiration: expiration,
+		}
+	}
+
+	return scanner.Err()
 }

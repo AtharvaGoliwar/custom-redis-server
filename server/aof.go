@@ -26,6 +26,53 @@ func (a *AOF) Append(command []string) error {
 	return err
 }
 
+// func (a *AOF) Rewrite(store *Store) error {
+// 	tmpFile, err := os.Create("appendonly.aof.tmp")
+// 	if err != nil {
+// 		return err
+// 	}
+// 	defer tmpFile.Close()
+
+// 	store.mu.RLock()
+// 	defer store.mu.RUnlock()
+
+// 	for key, item := range store.data {
+// 		// Skip expired keys
+// 		if item.Expiration > 0 && time.Now().Unix() > item.Expiration {
+// 			continue
+// 		}
+
+// 		// Write SET command
+// 		line := fmt.Sprintf("*3\r\n$3\r\nSET\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n",
+// 			len(key), key, len(item.Value), item.Value)
+// 		_, err := tmpFile.WriteString(line)
+// 		if err != nil {
+// 			return err
+// 		}
+
+// 		// Write EXPIRE command if TTL exists
+// 		if item.Expiration > 0 {
+// 			ttl := item.Expiration - time.Now().Unix()
+// 			if ttl > 0 {
+// 				expireLine := fmt.Sprintf("*3\r\n$6\r\nEXPIRE\r\n$%d\r\n%s\r\n$%d\r\n%d\r\n",
+// 					len(key), key, len(fmt.Sprintf("%d", ttl)), ttl)
+// 				_, err := tmpFile.WriteString(expireLine)
+// 				if err != nil {
+// 					return err
+// 				}
+// 			}
+// 		}
+// 	}
+
+// 	// Atomically replace original AOF
+// 	err = os.Rename("appendonly.aof.tmp", "appendonly.aof")
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	return nil
+// }
+
 func (a *AOF) Close() {
 	a.file.Close()
 }
