@@ -382,10 +382,10 @@ func (s *Server) executeCommand(tokens []string, aof *AOF, session *ClientSessio
 	}
 
 	// Enforce key access for commands that involve keys
-	if session != nil && session.group != "admin" && len(tokens) > 1 && cmd != "SUBSCRIBE" && cmd != "PUBLISH" && cmd != "PING" {
+	if session != nil && session.group != "admin" && len(tokens) > 1 && cmd != "SUBSCRIBE" && cmd != "PUBLISH" && cmd != "PING" && cmd != "SAVE" {
 		key := tokens[1]
 		if !strings.HasPrefix(key, session.group+":") {
-			return protocol.EncodeError("Permission denied for key " + key)
+			return protocol.EncodeError("Permission denied for key " + key + "\n" + "Use <group-name>:<key-name> as the key")
 		}
 	}
 
@@ -393,7 +393,7 @@ func (s *Server) executeCommand(tokens []string, aof *AOF, session *ClientSessio
 		if len(tokens) > 2 {
 			for i := 1; i < len(tokens); i++ {
 				if !strings.HasPrefix(tokens[i], session.group+":") {
-					return protocol.EncodeError("Permission denied for key " + tokens[i])
+					return protocol.EncodeError("Permission denied for key " + tokens[i] + "\n" + "Use <group-name>:<key-name> as the key")
 				}
 			}
 		}
@@ -403,7 +403,7 @@ func (s *Server) executeCommand(tokens []string, aof *AOF, session *ClientSessio
 		if len(tokens) > 3 {
 			for i := 1; i < len(tokens); i += 2 {
 				if !strings.HasPrefix(tokens[i], session.group+":") {
-					return protocol.EncodeError("Permission denied for key " + tokens[i])
+					return protocol.EncodeError("Permission denied for key " + tokens[i] + "\n" + "Use <group-name>:<key-name> as the key")
 				}
 			}
 		}
@@ -450,7 +450,7 @@ func (s *Server) executeCommand(tokens []string, aof *AOF, session *ClientSessio
 			values := []string{}
 			for i := 1; i < len(tokens); i++ {
 				if !strings.HasPrefix(tokens[i], session.group+":") {
-					return protocol.EncodeError("Permission denied for key " + tokens[i])
+					return protocol.EncodeError("Permission denied for key " + tokens[i] + "\n" + "Use <group-name>:<key-name> as the key")
 				}
 				val, ok := s.Store.Get(tokens[i])
 				if !ok {
@@ -508,13 +508,13 @@ func (s *Server) executeCommand(tokens []string, aof *AOF, session *ClientSessio
 		}
 
 	case "ME":
-		values := []string{}
+		// values := []string{}
 		if len(tokens) > 1 {
 			return protocol.EncodeError("wrong number of arguments for ME")
 		}
-		values = append(values, protocol.EncodeBulk(session.username))
-		values = append(values, protocol.EncodeBulk(session.group))
-		return protocol.EncodeArrayRaw(values)
+		// values = append(values, protocol.EncodeBulk(session.username))
+		// values = append(values, protocol.EncodeBulk(session.group))
+		return protocol.EncodeSimple("Username: " + session.username + "\n" + "Group Name: " + session.group)
 
 	case "PING":
 		if len(tokens) == 1 {
@@ -524,6 +524,20 @@ func (s *Server) executeCommand(tokens []string, aof *AOF, session *ClientSessio
 			return protocol.EncodeError("wrong number of arguments for PING")
 		}
 		return protocol.EncodeSimple(tokens[1])
+
+	case "SAVE":
+		if len(tokens) > 1 {
+			return protocol.EncodeError("wrong number of arguments for SAVE")
+		}
+		err := s.Store.SaveRDB("dump.rdb")
+		if err != nil {
+			fmt.Println("AutoSave RDB error:", err)
+			return protocol.EncodeInteger(0)
+		} else {
+			s.Rewrite()
+			fmt.Println("AutoSave RDB completed")
+			return protocol.EncodeInteger(1)
+		}
 
 	case "PUBLISH":
 		return s.publish(tokens)
