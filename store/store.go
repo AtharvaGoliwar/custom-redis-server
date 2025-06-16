@@ -63,9 +63,6 @@ func (s *Store) Get(key string) (string, bool) {
 	if !found {
 		return "", false
 	}
-	if item.Expiration > 0 && time.Now().Unix() > item.Expiration {
-		return "", false
-	}
 	return item.Value, true
 }
 
