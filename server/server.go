@@ -18,9 +18,11 @@ import (
 )
 
 type Server struct {
-	Store *store.Store
-	aof   *AOF
-	ln    net.Listener // hold listener here for shutdown
+	Store   *store.Store
+	aof     *AOF
+	aofLock sync.Mutex
+
+	ln net.Listener // hold listener here for shutdown
 
 	credentials map[string]string // username -> password
 	userGroups  map[string]string // username -> group
@@ -127,56 +129,83 @@ func (s *Server) startAutoSaveRDB() {
 		if err != nil {
 			fmt.Println("AutoSave RDB error:", err)
 		} else {
-			s.Rewrite()
-			fmt.Println("AutoSave RDB completed")
+			if err := s.Rewrite(); err != nil {
+				fmt.Println("Rewrite error:", err)
+			} else {
+				fmt.Println("AutoSave RDB completed")
+			}
 		}
 	}
 }
 
 func (s *Server) Rewrite() error {
+	s.aofLock.Lock()
+	defer s.aofLock.Unlock()
+
+	// Step 1: Create temp file
 	tmpFile, err := os.Create("appendonly.aof.tmp")
 	if err != nil {
-		return err
+		return fmt.Errorf("create temp file: %v", err)
 	}
-	defer tmpFile.Close()
+	writer := bufio.NewWriter(tmpFile)
 
+	// Step 2: Dump current key-value store
 	s.Store.Mu.RLock()
-	defer s.Store.Mu.RUnlock()
-
 	for key, item := range s.Store.Data {
-		// Skip expired keys
 		if item.Expiration > 0 && time.Now().Unix() > item.Expiration {
 			continue
 		}
 
-		// Write SET command
-		line := fmt.Sprintf("*3\r\n$3\r\nSET\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n",
+		// SET
+		setCmd := fmt.Sprintf("*3\r\n$3\r\nSET\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n",
 			len(key), key, len(item.Value), item.Value)
-		_, err := tmpFile.WriteString(line)
-		if err != nil {
-			return err
-		}
+		writer.WriteString(setCmd)
 
-		// Write EXPIRE command if TTL exists
+		// EXPIRE
 		if item.Expiration > 0 {
 			ttl := item.Expiration - time.Now().Unix()
 			if ttl > 0 {
-				expireLine := fmt.Sprintf("*3\r\n$6\r\nEXPIRE\r\n$%d\r\n%s\r\n$%d\r\n%d\r\n",
+				expireCmd := fmt.Sprintf("*3\r\n$6\r\nEXPIRE\r\n$%d\r\n%s\r\n$%d\r\n%d\r\n",
 					len(key), key, len(fmt.Sprintf("%d", ttl)), ttl)
-				_, err := tmpFile.WriteString(expireLine)
-				if err != nil {
-					return err
-				}
+				writer.WriteString(expireCmd)
 			}
 		}
 	}
+	s.Store.Mu.RUnlock()
 
-	// Atomically replace original AOF
-	err = os.Rename("appendonly.aof.tmp", "appendonly.aof")
-	if err != nil {
-		return err
+	// Step 3: Write user management commands (ADDUSER)
+	for username, password := range s.credentials {
+		group := s.userGroups[username]
+		addUserCmd := fmt.Sprintf("*4\r\n$7\r\nADDUSER\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n",
+			len(username), username,
+			len(password), password,
+			len(group), group)
+		writer.WriteString(addUserCmd)
 	}
 
+	writer.Flush()
+	tmpFile.Close()
+
+	// Step 4: Close old AOF
+	if s.aof != nil {
+		if err := s.aof.Close(); err != nil {
+			fmt.Println("Warning: AOF close failed:", err)
+		}
+	}
+
+	// Step 5: Replace old file
+	if err := os.Rename("appendonly.aof.tmp", "appendonly.aof"); err != nil {
+		return fmt.Errorf("rename failed: %v", err)
+	}
+
+	// Step 6: Reopen new AOF
+	newAOF, err := NewAOF("appendonly.aof")
+	if err != nil {
+		return fmt.Errorf("reopen failed: %v", err)
+	}
+	s.aof = newAOF
+
+	fmt.Println("AOF Rewrite completed ✅")
 	return nil
 }
 
@@ -309,7 +338,7 @@ func isValidCommand(tokens []string) bool {
 	switch cmd {
 	case "EXPIRE":
 		return len(tokens) == 3
-	case "PERSIST", "TTL":
+	case "PERSIST", "TTL", "KEYS":
 		return len(tokens) == 2
 	case "DEL", "EXISTS":
 		return len(tokens) >= 2
@@ -382,7 +411,7 @@ func (s *Server) executeCommand(tokens []string, aof *AOF, session *ClientSessio
 	}
 
 	// Enforce key access for commands that involve keys
-	if session != nil && session.group != "admin" && len(tokens) > 1 && cmd != "SUBSCRIBE" && cmd != "PUBLISH" && cmd != "PING" && cmd != "SAVE" {
+	if session != nil && session.group != "admin" && len(tokens) > 1 && cmd != "SUBSCRIBE" && cmd != "PUBLISH" && cmd != "PING" && cmd != "SAVE" && cmd != "KEYS" {
 		key := tokens[1]
 		if !strings.HasPrefix(key, session.group+":") {
 			return protocol.EncodeError("Permission denied for key " + key + "\n" + "Use <group-name>:<key-name> as the key")
@@ -515,6 +544,22 @@ func (s *Server) executeCommand(tokens []string, aof *AOF, session *ClientSessio
 		// values = append(values, protocol.EncodeBulk(session.username))
 		// values = append(values, protocol.EncodeBulk(session.group))
 		return protocol.EncodeSimple("Username: " + session.username + "\n" + "Group Name: " + session.group)
+
+	case "KEYS":
+		if tokens[1] != "*" || len(tokens) > 2 {
+			return protocol.EncodeError("wrong number of arguments for KEYS")
+		}
+		keys := []string{}
+		for key := range s.Store.Data {
+			if session.group == "admin" {
+				keys = append(keys, key)
+			} else {
+				if strings.HasPrefix(key, session.group+":") {
+					keys = append(keys, key)
+				}
+			}
+		}
+		return protocol.EncodeArray(keys)
 
 	case "PING":
 		if len(tokens) == 1 {

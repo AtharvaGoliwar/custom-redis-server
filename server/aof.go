@@ -73,6 +73,17 @@ func (a *AOF) Append(command []string) error {
 // 	return nil
 // }
 
-func (a *AOF) Close() {
-	a.file.Close()
+func (a *AOF) Close() error {
+	if a.file != nil {
+		return a.file.Close()
+	}
+	return nil
+}
+func (a *AOF) Reopen(filename string) error {
+	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	a.file = file
+	return nil
 }
