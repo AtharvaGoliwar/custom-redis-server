@@ -537,13 +537,14 @@ func (s *Server) executeCommand(tokens []string, aof *AOF, session *ClientSessio
 		}
 
 	case "ME":
-		// values := []string{}
+		values := []string{}
 		if len(tokens) > 1 {
 			return protocol.EncodeError("wrong number of arguments for ME")
 		}
-		// values = append(values, protocol.EncodeBulk(session.username))
-		// values = append(values, protocol.EncodeBulk(session.group))
-		return protocol.EncodeSimple("Username: " + session.username + "\n" + "Group Name: " + session.group)
+		values = append(values, session.username)
+		values = append(values, session.group)
+		return protocol.EncodeArray(values)
+		// return protocol.EncodeSimple("Username: " + session.username + "\n" + "Group Name: " + session.group)
 
 	case "KEYS":
 		if tokens[1] != "*" || len(tokens) > 2 {
